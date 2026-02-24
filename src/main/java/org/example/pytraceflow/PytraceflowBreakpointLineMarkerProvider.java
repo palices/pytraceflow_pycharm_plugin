@@ -13,7 +13,14 @@ import com.intellij.execution.configurations.RunProfile;
 import com.intellij.execution.util.ExecUtil;
 import com.intellij.execution.configurations.GeneralCommandLine;
 import com.intellij.util.execution.ParametersListUtil;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonParser;
 import com.intellij.ui.JBColor;
+import com.intellij.util.ui.UIUtil;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.execution.RunManager;
@@ -151,10 +158,11 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
 
         DefaultMutableTreeNode placeholder = new DefaultMutableTreeNode("No data");
         Tree tree = new Tree(new DefaultTreeModel(placeholder));
-        JTextArea details = new JTextArea();
+        JEditorPane details = new JEditorPane();
         details.setEditable(false);
-        details.setLineWrap(true);
-        details.setWrapStyleWord(true);
+        details.setEditorKit(new javax.swing.text.html.HTMLEditorKit());
+        details.setContentType("text/html");
+        details.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
         styleTextAreas(tree, details);
 
         JSplitPane splitPane = new JSplitPane(
@@ -173,9 +181,11 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             }
             Object user = node.getUserObject();
             if (user instanceof TraceBlock block) {
+                details.setContentType("text/html");
                 details.setText(formatBlockDetails(block));
                 details.setCaretPosition(0);
             } else {
+                details.setContentType("text/plain");
                 details.setText(String.valueOf(user));
             }
         });
@@ -189,7 +199,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         updateCommandPreview(project, commandPreview);
         refreshFlow(project, targetCallable, "", status, tree, details);
 
-        root.setPreferredSize(new Dimension(920, 480)); // ventana más compacta
+        root.setPreferredSize(new Dimension(920, 480)); // compact window
         return root;
     }
 
@@ -199,7 +209,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             String filterText,
             JLabel status,
             Tree tree,
-        JTextArea details
+            JEditorPane details
     ) {
         ExecutionFlowData flow = BreakpointService.readExecutionFlow(project);
 
@@ -356,7 +366,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         try {
             Object runProfile = tryGetActiveRunProfile(project);
             if (runProfile == null) {
-                return "(sin configuración seleccionada)";
+                return "(no run configuration selected)";
             }
             runProfile = unwrapRunProfile(runProfile);
             if (!isPythonRunConfiguration(runProfile)) {
@@ -364,7 +374,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             }
             return buildCmdFromPyConfig(runProfile);
         } catch (Throwable t) {
-            return "(no se pudo obtener el comando)";
+            return "(could not obtain command)";
         }
     }
 
@@ -425,7 +435,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         }
 
         if (script == null || script.isBlank()) {
-            return "(sin script en la configuración Python)";
+            return "(no script in Python configuration)";
         }
         StringBuilder cmd = new StringBuilder();
         cmd.append("python pytraceflow.py -s \"").append(script).append("\"");
@@ -441,14 +451,14 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             JTextField cmdField,
             JLabel status,
             Tree tree,
-            JTextArea details,
+            JEditorPane details,
             String targetCallable,
             JTextField searchField
     ) {
         String commandText = cmdField.getText();
         List<String> parts = ParametersListUtil.parse(commandText);
         if (parts.isEmpty()) {
-            status.setText("Comando vacío; no se ejecuta.");
+            status.setText("Empty command; not executed.");
             return;
         }
 
@@ -462,7 +472,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         Color originalColor = button.getBackground();
         String originalText = button.getText();
         Color originalFg = button.getForeground();
-        button.setText("Generando...");
+        button.setText("Generating...");
         button.setBackground(Color.LIGHT_GRAY);
         button.setForeground(Color.WHITE);
         button.putClientProperty("busy", true);
@@ -476,22 +486,22 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
                 }
                 var output = ExecUtil.execAndGetOutput(cmd);
                 if (output.getExitCode() != 0) {
-                    String msg = "Fallo al generar (" + output.getExitCode() + "): " + output.getStderr();
+                    String msg = "Generation failed (" + output.getExitCode() + "): " + output.getStderr();
                     SwingUtilities.invokeLater(() -> status.setText(msg));
                 } else {
                     String resolved = chooseExistingJson(project, jsonPathArg);
                     if (resolved != null) {
                         BreakpointService.setOverrideJsonPath(resolved);
                         SwingUtilities.invokeLater(() -> {
-                            status.setText("Generado OK -> " + resolved);
+                            status.setText("Generated OK -> " + resolved);
                             refreshFlow(project, targetCallable, searchField.getText(), status, tree, details);
                         });
                     } else {
-                        SwingUtilities.invokeLater(() -> status.setText("No se encontró un JSON generado (probé comando, ptf.json y pytraceflow.json)"));
+                        SwingUtilities.invokeLater(() -> status.setText("No generated JSON found (checked command, ptf.json, pytraceflow.json)"));
                     }
                 }
             } catch (Exception ex) {
-                SwingUtilities.invokeLater(() -> status.setText("Error al ejecutar: " + ex.getMessage()));
+                SwingUtilities.invokeLater(() -> status.setText("Execution error: " + ex.getMessage()));
             } finally {
                 SwingUtilities.invokeLater(() -> {
                     button.setText(originalText);
@@ -564,12 +574,13 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         status.setForeground(new JBColor(new Color(20, 92, 64), new Color(150, 230, 200)));
     }
 
-    private static void styleTextAreas(Tree tree, JTextArea details) {
+    private static void styleTextAreas(Tree tree, JEditorPane details) {
         Color paneBg = new JBColor(new Color(250, 251, 253), new Color(38, 44, 52));
-        Color text = new JBColor(new Color(20, 24, 30), new Color(225, 233, 243));
+        Color text = new JBColor(new Color(20, 24, 30), new Color(245, 248, 255));
         tree.setBackground(paneBg);
         details.setBackground(paneBg);
         details.setForeground(text);
+        details.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
         tree.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
         details.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
     }
@@ -634,32 +645,166 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
     }
 
     private static String formatBlockDetails(TraceBlock block) {
+        Gson PRETTY_GSON = new GsonBuilder().setPrettyPrinting().create();
         StringBuilder sb = new StringBuilder();
-        appendLine(sb, "callable", block.displayCallable());
-        appendLine(sb, "duration_ms", block.durationMs());
+        String textHex = toHex(new JBColor(new Color(20, 24, 30), new Color(245, 248, 255)));
+        String bgHex = toHex(new JBColor(new Color(250, 251, 253), new Color(38, 44, 52)));
+        String sectionHex = toHex(new JBColor(new Color(242, 245, 249), new Color(48, 56, 68)));
+        String headerHex = toHex(new JBColor(new Color(224, 232, 245), new Color(66, 78, 96)));
+        String borderHex = toHex(new JBColor(new Color(210, 214, 222), new Color(70, 78, 92)));
+        sb.append("<html><body style='font-family:Segoe UI, sans-serif; font-size:10px; margin:0; padding:0; color:")
+                .append(textHex).append("; background:").append(bgHex).append(";'>");
 
+        sb.append("<div style='background:").append(headerHex).append("; padding:6px 10px; font-weight:700;'>Summary</div>");
+        sb.append("<div style='background:").append(sectionHex).append("; padding:8px 10px;'>");
+        sb.append("<table style='border-collapse:separate; border-spacing:0 4px; width:100%; border:0;' cellspacing='0' cellpadding='4' width='100%'>");
+        row(sb, "Callable", block.displayCallable());
+        row(sb, "Module", block.module());
+        row(sb, "Called label", block.called());
+        row(sb, "Caller", block.caller());
+        row(sb, "Duration", block.durationMs() == null ? "n/a" : block.durationMs() + " ms");
+        sb.append("</table></div>");
+
+        sb.append("<div style='background:").append(headerHex).append("; padding:6px 10px; font-weight:700; margin-top:6px;'>Memory</div>");
+        sb.append("<div style='background:").append(sectionHex).append("; padding:8px 10px;'>");
+        sb.append("<table style='border-collapse:separate; border-spacing:0 4px; width:100%; border:0;' cellspacing='0' cellpadding='4' width='100%'>");
         if (block.memoryBefore() != null) {
-            appendLine(sb, "memory_before.current", block.memoryBefore().current());
-            appendLine(sb, "memory_before.peak", block.memoryBefore().peak());
+            row(sb, "Before", "curr=" + block.memoryBefore().current() + ", peak=" + block.memoryBefore().peak());
         } else {
-            appendLine(sb, "memory_before", "null");
+            row(sb, "Before", "n/a");
         }
-
         if (block.memoryAfter() != null) {
-            appendLine(sb, "memory_after.current", block.memoryAfter().current());
-            appendLine(sb, "memory_after.peak", block.memoryAfter().peak());
+            row(sb, "After", "curr=" + block.memoryAfter().current() + ", peak=" + block.memoryAfter().peak());
         } else {
-            appendLine(sb, "memory_after", "null");
+            row(sb, "After", "n/a");
         }
+        sb.append("</table></div>");
 
-        sb.append("\ninputs:\n").append(block.inputs()).append("\n");
-        sb.append("\noutputs:\n").append(block.output()).append("\n");
-        sb.append("\nerror:\n").append(block.error()).append("\n");
+        sb.append("<div style='background:").append(headerHex).append("; padding:6px 10px; font-weight:700; margin-top:6px;'>Inputs</div>");
+        sb.append("<div style='background:").append(sectionHex).append("; padding:8px 10px;'>");
+        jsonBlock(sb, block.inputs(), PRETTY_GSON, borderHex);
+        sb.append("</div>");
+
+        sb.append("<div style='background:").append(headerHex).append("; padding:6px 10px; font-weight:700; margin-top:6px;'>Outputs</div>");
+        sb.append("<div style='background:").append(sectionHex).append("; padding:8px 10px;'>");
+        jsonBlock(sb, block.output(), PRETTY_GSON, borderHex);
+        sb.append("</div>");
+
+        sb.append("<div style='background:").append(headerHex).append("; padding:6px 10px; font-weight:700; margin-top:6px;'>Error</div>");
+        sb.append("<div style='background:").append(sectionHex).append("; padding:8px 10px;'>");
+        jsonBlock(sb, block.error(), PRETTY_GSON, borderHex);
+        sb.append("</div>");
+
+        sb.append("<div style='background:").append(headerHex).append("; padding:6px 10px; font-weight:700; margin-top:6px;'>Calls</div>");
+        sb.append("<div style='background:").append(sectionHex).append("; padding:8px 10px;'>");
+        if (block.calls().isEmpty()) {
+            sb.append("(none)");
+        } else {
+            sb.append("<ul style='margin:4px 0 0 12px; padding:0; list-style:disc;'>");
+            for (TraceBlock child : block.calls()) {
+                sb.append("<li style='margin-bottom:4px; list-style-position:outside;'>")
+                        .append(escape(child.displayCallable()))
+                        .append(" (")
+                        .append(child.durationMs() == null ? "n/a" : child.durationMs() + " ms")
+                        .append(")")
+                        .append("</li>");
+            }
+            sb.append("</ul>");
+        }
+        sb.append("</div>");
+
+        sb.append("</body></html>");
         return sb.toString();
     }
 
-    private static void appendLine(StringBuilder sb, String key, Object value) {
-        sb.append(key).append(": ").append(value).append("\n");
+    private static void row(StringBuilder sb, String label, Object value) {
+        sb.append("<tr><td style='padding-right:8px;'><b>").append(escape(label)).append("</b></td><td>")
+                .append(escape(value))
+                .append("</td></tr>");
+    }
+
+    private static void jsonBlock(StringBuilder sb, String value, Gson prettyGson, String borderHex) {
+        String v = prettyOrDash(value);
+        if (v.startsWith("{") || v.startsWith("[")) {
+            try {
+                JsonElement el = JsonParser.parseString(v);
+                sb.append(renderJson(el, prettyGson, borderHex));
+                return;
+            } catch (Exception ignored) {
+                // fall through
+            }
+        }
+        sb.append("<pre style='margin:0; white-space:pre-wrap; word-break:break-word;'>")
+                .append(escape(v))
+                .append("</pre>");
+    }
+
+    private static String renderJson(JsonElement el, Gson prettyGson, String borderHex) {
+        if (el == null || el.isJsonNull()) {
+            return "-";
+        }
+        if (el.isJsonPrimitive()) {
+            return escape(el.getAsJsonPrimitive().toString());
+        }
+        if (el.isJsonObject()) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("<table style='border-collapse:collapse; width:100%; margin-top:4px;' cellspacing='0' cellpadding='4'>");
+            JsonObject obj = el.getAsJsonObject();
+            for (String key : obj.keySet()) {
+                sb.append("<tr><td><b>").append(escape(key)).append("</b></td><td>");
+                sb.append(renderJson(obj.get(key), prettyGson, borderHex));
+                sb.append("</td></tr>");
+            }
+            sb.append("</table>");
+            return sb.toString();
+        }
+        if (el.isJsonArray()) {
+            JsonArray arr = el.getAsJsonArray();
+            StringBuilder sb = new StringBuilder();
+            sb.append("<ul style='margin:4px 0 0 12px; padding:0; list-style:disc;'>");
+            int idx = 0;
+            for (JsonElement e : arr) {
+                sb.append("<li style='margin-bottom:4px; list-style-position:outside;'>");
+                if (e.isJsonPrimitive()) {
+                    sb.append(renderJson(e, prettyGson, borderHex));
+                } else {
+                    sb.append(renderJson(e, prettyGson, borderHex));
+                }
+                sb.append("</li>");
+                idx++;
+            }
+            sb.append("</ul>");
+            return sb.toString();
+        }
+        // fallback pretty string
+        return "<pre style='margin:0; white-space:pre-wrap; word-break:break-word;'>"
+                + escape(prettyGson.toJson(el))
+                + "</pre>";
+    }
+
+    private static String prettyOrDash(String value) {
+        if (value == null) {
+            return "-";
+        }
+        String trimmed = value.trim();
+        if (trimmed.equalsIgnoreCase("null") || trimmed.isBlank()) {
+            return "-";
+        }
+        return trimmed;
+    }
+
+    private static String toHex(Color c) {
+        return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
+    }
+
+    private static String escape(Object value) {
+        if (value == null) return "-";
+        String s = value.toString();
+        return s
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;");
     }
 
     private static boolean isFirstNonWhitespaceElementOnLine(Document document, int offset, int line) {
