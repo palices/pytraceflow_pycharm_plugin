@@ -26,9 +26,9 @@ import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreeNode;
 import javax.swing.tree.TreePath;
 import java.awt.*;
-import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Locale;
 
 public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderDescriptor {
     private static final Icon GUTTER_ICON = IconLoader.getIcon("/icons/pytraceflowGutter.svg", PytraceflowBreakpointLineMarkerProvider.class);
@@ -94,7 +94,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         JPanel panel = buildPopupPanel(project, targetCallable);
         com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
                 .createComponentPopupBuilder(panel, null)
-                .setRequestFocus(false)
+                .setRequestFocus(true)
                 .setResizable(true)
                 .setMovable(true)
                 .setTitle("Pytraceflow")
@@ -107,8 +107,13 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
 
         JLabel status = new JLabel();
         JButton refresh = new JButton("Refresh");
+        JTextField searchField = new JTextField(24);
+        JButton searchButton = new JButton("Buscar");
         JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         header.add(refresh);
+        header.add(new JLabel("Filtro callable/called:"));
+        header.add(searchField);
+        header.add(searchButton);
         header.add(status);
         root.add(header, BorderLayout.NORTH);
 
@@ -142,8 +147,10 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             }
         });
 
-        refresh.addActionListener(e -> refreshFlow(project, targetCallable, status, tree, details));
-        refreshFlow(project, targetCallable, status, tree, details);
+        refresh.addActionListener(e -> refreshFlow(project, targetCallable, searchField.getText(), status, tree, details));
+        searchButton.addActionListener(e -> refreshFlow(project, targetCallable, searchField.getText(), status, tree, details));
+        searchField.addActionListener(e -> refreshFlow(project, targetCallable, searchField.getText(), status, tree, details));
+        refreshFlow(project, targetCallable, "", status, tree, details);
 
         root.setPreferredSize(new Dimension(1080, 520));
         return root;
@@ -152,6 +159,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
     private static void refreshFlow(
             Project project,
             String targetCallable,
+            String filterText,
             JLabel status,
             Tree tree,
             JTextArea details
@@ -161,25 +169,53 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         DefaultMutableTreeNode rootUi = new DefaultMutableTreeNode(
                 flow.sourceFile() == null ? "Flow JSON (no encontrado)" : "Flow JSON: " + flow.sourceFile()
         );
-        for (TraceBlock block : flow.roots()) {
-            rootUi.add(buildTree(block));
-        }
+        List<TraceBlock> filteredRoots = filterByText(flow.roots(), filterText);
 
         tree.setModel(new DefaultTreeModel(rootUi));
         expandAll(tree);
 
         List<TraceBlock> matches = BreakpointService.findByCallable(flow.roots(), targetCallable);
         String callableText = targetCallable == null || targetCallable.isBlank() ? "(sin callable detectado)" : targetCallable;
-        status.setText("Callable breakpoint: " + callableText + " | Roots: " + flow.roots().size() + " | Matches: " + matches.size());
+        String filterLabel = (filterText == null || filterText.isBlank()) ? "sin filtro" : "\"" + filterText + "\"";
+        status.setText("Callable breakpoint: " + callableText
+                + " | Roots: " + flow.roots().size()
+                + " | Matches: " + matches.size()
+                + " | Filtro: " + filterLabel);
 
-        if (!matches.isEmpty()) {
+        boolean filterApplied = filterText != null && !filterText.isBlank();
+
+        // Sin filtro y sin coincidencias: no mostrar nada
+        if (!filterApplied && matches.isEmpty()) {
+            rootUi.removeAllChildren();
+            tree.setModel(new DefaultTreeModel(rootUi));
+            details.setText("No se encontraron coincidencias para el callable detectado.");
+            tree.clearSelection();
+            return;
+        }
+
+        if (!filterApplied && !matches.isEmpty()) {
             TreePath matchPath = findPathForBlock(rootUi, matches.get(0));
             if (matchPath != null) {
-                tree.setSelectionPath(matchPath);
-                tree.scrollPathToVisible(matchPath);
+                // Build tree only with the matched block's subtree
+                rootUi.removeAllChildren();
+                rootUi.add(buildTree(matches.get(0)));
+                tree.setModel(new DefaultTreeModel(rootUi));
+                expandAll(tree);
+
+                TreePath refreshedPath = findPathForBlock(rootUi, matches.get(0));
+                tree.setSelectionPath(refreshedPath);
+                tree.scrollPathToVisible(refreshedPath);
                 return;
             }
         }
+
+        // If there are matches via filter, show only filtered roots
+        rootUi.removeAllChildren();
+        for (TraceBlock block : filteredRoots) {
+            rootUi.add(buildTree(block));
+        }
+        tree.setModel(new DefaultTreeModel(rootUi));
+        expandAll(tree);
 
         if (rootUi.getChildCount() > 0) {
             DefaultMutableTreeNode firstChild = (DefaultMutableTreeNode) rootUi.getChildAt(0);
@@ -188,6 +224,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             tree.scrollPathToVisible(firstPath);
         } else {
             details.setText("No se encontraron bloques de ejecucion en el JSON.");
+            tree.clearSelection();
         }
     }
 
@@ -227,14 +264,62 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         }
     }
 
+    private static List<TraceBlock> filterByText(List<TraceBlock> roots, String filter) {
+        if (roots == null || roots.isEmpty()) {
+            return List.of();
+        }
+        if (filter == null || filter.isBlank()) {
+            return roots;
+        }
+        String needle = filter.toLowerCase(Locale.ROOT);
+        return roots.stream()
+                .map(block -> filterBlock(block, needle))
+                .filter(block -> block != null)
+                .toList();
+    }
+
+    private static TraceBlock filterBlock(TraceBlock block, String needle) {
+        if (block == null) {
+            return null;
+        }
+        List<TraceBlock> filteredChildren = block.calls().stream()
+                .map(child -> filterBlock(child, needle))
+                .filter(child -> child != null)
+                .toList();
+
+        boolean selfMatches = containsIgnoreCase(block.callable(), needle) || containsIgnoreCase(block.called(), needle);
+        if (!selfMatches && filteredChildren.isEmpty()) {
+            return null;
+        }
+
+        return new TraceBlock(
+                block.id(),
+                block.callable(),
+                block.module(),
+                block.called(),
+                block.caller(),
+                block.instanceId(),
+                block.durationMs(),
+                block.memoryBefore(),
+                block.memoryAfter(),
+                block.inputs(),
+                block.inputsAfter(),
+                block.output(),
+                block.error(),
+                filteredChildren
+        );
+    }
+
+    private static boolean containsIgnoreCase(String value, String needle) {
+        if (value == null || needle == null) {
+            return false;
+        }
+        return value.toLowerCase(Locale.ROOT).contains(needle);
+    }
+
     private static String formatBlockDetails(TraceBlock block) {
         StringBuilder sb = new StringBuilder();
-        appendLine(sb, "id", block.id());
-        appendLine(sb, "callable", block.callable());
-        appendLine(sb, "module", block.module());
-        appendLine(sb, "called", block.called());
-        appendLine(sb, "caller", block.caller());
-        appendLine(sb, "instance_id", block.instanceId());
+        appendLine(sb, "callable", block.displayCallable());
         appendLine(sb, "duration_ms", block.durationMs());
 
         if (block.memoryBefore() != null) {
@@ -252,21 +337,8 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         }
 
         sb.append("\ninputs:\n").append(block.inputs()).append("\n");
-        sb.append("\ninputs_after:\n").append(block.inputsAfter()).append("\n");
-        sb.append("\noutput:\n").append(block.output()).append("\n");
+        sb.append("\noutputs:\n").append(block.output()).append("\n");
         sb.append("\nerror:\n").append(block.error()).append("\n");
-
-        List<String> callLabels = new ArrayList<>();
-        for (TraceBlock child : block.calls()) {
-            callLabels.add(child.label());
-        }
-        sb.append("\ncalls_count: ").append(block.calls().size()).append("\n");
-        if (!callLabels.isEmpty()) {
-            sb.append("calls:\n");
-            for (String label : callLabels) {
-                sb.append(" - ").append(label).append("\n");
-            }
-        }
         return sb.toString();
     }
 
