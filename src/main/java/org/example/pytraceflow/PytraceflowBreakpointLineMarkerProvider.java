@@ -194,7 +194,6 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         searchButton.addActionListener(e -> refreshFlow(project, targetCallable, searchField.getText(), status, tree, details));
         searchField.addActionListener(e -> refreshFlow(project, targetCallable, searchField.getText(), status, tree, details));
         generateBtn.addActionListener(e -> runGeneration(project, generateBtn, commandPreview, status, tree, details, targetCallable, searchField));
-        generateBtn.addActionListener(e -> updateCommandPreview(project, commandPreview));
 
         updateCommandPreview(project, commandPreview);
         refreshFlow(project, targetCallable, "", status, tree, details);
@@ -669,12 +668,12 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         sb.append("<div style='background:").append(sectionHex).append("; padding:8px 10px;'>");
         sb.append("<table style='border-collapse:separate; border-spacing:0 4px; width:100%; border:0;' cellspacing='0' cellpadding='4' width='100%'>");
         if (block.memoryBefore() != null) {
-            row(sb, "Before", "curr=" + block.memoryBefore().current() + ", peak=" + block.memoryBefore().peak());
+            row(sb, "Before", "curr=" + toMb(block.memoryBefore().current()) + ", peak=" + toMb(block.memoryBefore().peak()));
         } else {
             row(sb, "Before", "n/a");
         }
         if (block.memoryAfter() != null) {
-            row(sb, "After", "curr=" + block.memoryAfter().current() + ", peak=" + block.memoryAfter().peak());
+            row(sb, "After", "curr=" + toMb(block.memoryAfter().current()) + ", peak=" + toMb(block.memoryAfter().peak()));
         } else {
             row(sb, "After", "n/a");
         }
@@ -791,6 +790,14 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             return "-";
         }
         return trimmed;
+    }
+
+    private static String toMb(Long bytes) {
+        if (bytes == null) {
+            return "n/a";
+        }
+        double mb = bytes / (1024.0 * 1024.0);
+        return String.format("%.1f MB", mb);
     }
 
     private static String toHex(Color c) {
