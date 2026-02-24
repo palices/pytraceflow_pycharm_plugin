@@ -134,6 +134,10 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         actionRow.add(generateBtn);
         actionRow.add(new JLabel("Command:"));
         actionRow.add(commandPreview);
+        JButton helpBtn = new JButton("?");
+        helpBtn.setPreferredSize(new Dimension(22, 22));
+        styleButton(helpBtn);
+        actionRow.add(helpBtn);
         applyAccentRowColors(actionRow, commandPreview);
         styleButton(generateBtn);
 
@@ -194,12 +198,44 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         searchButton.addActionListener(e -> refreshFlow(project, targetCallable, searchField.getText(), status, tree, details));
         searchField.addActionListener(e -> refreshFlow(project, targetCallable, searchField.getText(), status, tree, details));
         generateBtn.addActionListener(e -> runGeneration(project, generateBtn, commandPreview, status, tree, details, targetCallable, searchField));
+        helpBtn.addActionListener(e -> showHelp(commandPreview));
 
         updateCommandPreview(project, commandPreview);
         refreshFlow(project, targetCallable, "", status, tree, details);
 
         root.setPreferredSize(new Dimension(920, 480)); // compact window
         return root;
+    }
+
+    private static void showHelp(JTextField commandField) {
+        String helpText = """
+                <html><body style='font-family:Segoe UI, sans-serif; font-size:11px; margin:6px;'>
+                <div style='font-size:12px; font-weight:700; margin-bottom:4px;'>CLI options</div>
+                -s/--script (required): target script path.<br>
+                -o/--output: JSON output path (default pft.json).<br>
+                --flush-interval: seconds between background flushes; &le;0 disables thread (default 1.0).<br>
+                --flush-every-call: force flush on every event (slow; legacy).<br>
+                --log-flushes: log each flush to stderr.<br>
+                --with-memory: enable memory snapshots (psutil + tracemalloc). Default off; slower when enabled.<br>
+                --no-memory: disable memory snapshots.<br>
+                --no-tracemalloc: keep psutil but skip tracemalloc.<br>
+                --skip-inputs: do not serialize call inputs/outputs.<br>
+                OTLP export (optional, needs opentelemetry-*):<br>
+                &nbsp;&nbsp;--export-otlp-endpoint http://localhost:4318/v1/traces<br>
+                &nbsp;&nbsp;--export-otlp-service myapp<br>
+                &nbsp;&nbsp;--export-otlp-header key=value (repeatable)<br>
+                Other args are forwarded to the profiled script.<br><br>
+                <div style='font-size:12px; font-weight:700; margin:6px 0 4px 0;'>Usage examples</div>
+                <code>python pytraceflow.py -s samples/basic/basic_sample.py -o pft.json</code><br>
+                <code>python pytraceflow.py -s samples/basic/basic_sample.py --with-memory --flush-interval 2.0</code><br>
+                <code>python pytraceflow.py -s samples/basic/basic_sample.py --flush-interval 0 --skip-inputs</code><br>
+                <code>python pytraceflow.py -s samples/basic/basic_sample.py --flush-every-call --log-flushes</code><br>
+                <code>python pytraceflow.py -s samples/basic/basic_sample.py --with-memory --no-tracemalloc</code>
+                </body></html>
+                """;
+        JLabel label = new JLabel("<html>" + helpText + "</html>");
+        label.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        JOptionPane.showMessageDialog(commandField, label, "Pytraceflow CLI Help", JOptionPane.INFORMATION_MESSAGE);
     }
 
     private static void refreshFlow(
