@@ -1,0 +1,17 @@
+<idea-plugin>
+    <id>org.example.pytraceflow</id>
+    <name>Pytraceflow Breakpoints</name>
+    <vendor email="dev@example.org">Pytraceflow</vendor>
+    <description><![CDATA[
+        Popup that reads breakpoint definitions from JSON in project root,
+        detects Python callable on breakpoint lines, and matches against callable in JSON.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <codeInsight.lineMarkerProvider
+                language="Python"
+                implementationClass="org.example.pytraceflow.PytraceflowBreakpointLineMarkerProvider"/>
+    </extensions>
+</idea-plugin>
