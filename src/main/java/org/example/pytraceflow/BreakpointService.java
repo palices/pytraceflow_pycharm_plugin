@@ -8,6 +8,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 
 import java.nio.charset.StandardCharsets;
@@ -19,7 +20,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class BreakpointService {
-    private static final String JSON_FILE_NAME = "pytraceflow.json";
+    private static final String DEFAULT_JSON_FILE_NAME = "pytraceflow.json";
+    private static volatile String overrideJsonPath = null;
     private static final Gson GSON = new Gson();
     private static final Gson PRETTY_GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Pattern CLASS_PATTERN = Pattern.compile("^class\\s+([A-Za-z_][A-Za-z0-9_]*)");
@@ -34,7 +36,7 @@ public final class BreakpointService {
             return new ExecutionFlowData(null, List.of());
         }
 
-        VirtualFile jsonFile = resolveConfigJson(baseDir);
+        VirtualFile jsonFile = resolveConfigJson(baseDir, overrideJsonPath);
         if (jsonFile == null || jsonFile.isDirectory()) {
             return new ExecutionFlowData(null, List.of());
         }
@@ -82,6 +84,10 @@ public final class BreakpointService {
 
     public static String detectCallableAtLine(VirtualFile file, int oneBasedLine) {
         return detectPythonCallable(file, oneBasedLine);
+    }
+
+    public static void setOverrideJsonPath(String path) {
+        overrideJsonPath = path;
     }
 
     private static void collectByCallable(TraceBlock block, String normalizedCallable, List<TraceBlock> out) {
@@ -202,12 +208,22 @@ public final class BreakpointService {
         return PRETTY_GSON.toJson(el);
     }
 
-    private static VirtualFile resolveConfigJson(VirtualFile baseDir) {
-        VirtualFile preferred = baseDir.findChild(JSON_FILE_NAME);
+    private static VirtualFile resolveConfigJson(VirtualFile baseDir, String overridePath) {
+        // 1) explicit override (absolute or relative)
+        if (overridePath != null && !overridePath.isBlank()) {
+            VirtualFile vf = resolveExplicitPath(baseDir, overridePath.trim());
+            if (vf != null && !vf.isDirectory()) {
+                return vf;
+            }
+        }
+
+        // 2) default file name
+        VirtualFile preferred = baseDir.findChild(DEFAULT_JSON_FILE_NAME);
         if (preferred != null && !preferred.isDirectory()) {
             return preferred;
         }
 
+        // 3) first .json file
         VirtualFile[] children = baseDir.getChildren();
         return Arrays.stream(children)
                 .filter(file -> !file.isDirectory())
@@ -215,6 +231,23 @@ public final class BreakpointService {
                 .sorted((a, b) -> a.getName().compareToIgnoreCase(b.getName()))
                 .findFirst()
                 .orElse(null);
+    }
+
+    private static VirtualFile resolveExplicitPath(VirtualFile baseDir, String path) {
+        if (path.isEmpty()) {
+            return null;
+        }
+        // absolute
+        if (path.startsWith("/") || path.matches("^[A-Za-z]:\\\\.*")) {
+            return LocalFileSystem.getInstance().findFileByPath(path);
+        }
+        // relative to project root
+        VirtualFile child = baseDir.findFileByRelativePath(path);
+        if (child != null) {
+            return child;
+        }
+        // relative simple child
+        return baseDir.findChild(path);
     }
 
     private static String detectPythonCallable(VirtualFile file, int lineNumber) {

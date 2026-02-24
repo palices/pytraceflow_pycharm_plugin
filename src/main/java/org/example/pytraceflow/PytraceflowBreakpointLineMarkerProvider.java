@@ -9,8 +9,15 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.IconLoader;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.execution.configurations.RunProfile;
+import com.intellij.execution.util.ExecUtil;
+import com.intellij.execution.configurations.GeneralCommandLine;
+import com.intellij.util.execution.ParametersListUtil;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
+import com.intellij.execution.RunManager;
+import com.intellij.execution.RunnerAndConfigurationSettings;
+import com.intellij.execution.configurations.RunConfiguration;
 import com.intellij.ui.ScrollPaneFactory;
 import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.treeStructure.Tree;
@@ -26,6 +33,9 @@ import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreeNode;
 import javax.swing.tree.TreePath;
 import java.awt.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
@@ -106,6 +116,16 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         JPanel root = new JPanel(new BorderLayout(0, 8));
 
         JLabel status = new JLabel();
+
+        // Row 1: generate button + command preview
+        JButton generateBtn = new JButton("Generate Pytraceflow json");
+        JTextField commandPreview = new JTextField(buildCommandPreview(project), 48);
+        commandPreview.setEditable(true);
+        JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        actionRow.add(generateBtn);
+        actionRow.add(new JLabel("Comando:"));
+        actionRow.add(commandPreview);
+
         JButton refresh = new JButton("Refresh");
         JTextField searchField = new JTextField(24);
         JButton searchButton = new JButton("Buscar");
@@ -115,7 +135,12 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         header.add(searchField);
         header.add(searchButton);
         header.add(status);
-        root.add(header, BorderLayout.NORTH);
+
+        JPanel north = new JPanel();
+        north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
+        north.add(actionRow);
+        north.add(header);
+        root.add(north, BorderLayout.NORTH);
 
         DefaultMutableTreeNode placeholder = new DefaultMutableTreeNode("Sin datos");
         Tree tree = new Tree(new DefaultTreeModel(placeholder));
@@ -129,7 +154,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
                 ScrollPaneFactory.createScrollPane(tree),
                 ScrollPaneFactory.createScrollPane(details)
         );
-        splitPane.setResizeWeight(0.38);
+        splitPane.setResizeWeight(0.30); // 30% árbol, 70% detalle
         root.add(splitPane, BorderLayout.CENTER);
 
         tree.addTreeSelectionListener(e -> {
@@ -150,9 +175,13 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         refresh.addActionListener(e -> refreshFlow(project, targetCallable, searchField.getText(), status, tree, details));
         searchButton.addActionListener(e -> refreshFlow(project, targetCallable, searchField.getText(), status, tree, details));
         searchField.addActionListener(e -> refreshFlow(project, targetCallable, searchField.getText(), status, tree, details));
+        generateBtn.addActionListener(e -> runGeneration(project, generateBtn, commandPreview, status, tree, details, targetCallable, searchField));
+        generateBtn.addActionListener(e -> updateCommandPreview(project, commandPreview));
+
+        updateCommandPreview(project, commandPreview);
         refreshFlow(project, targetCallable, "", status, tree, details);
 
-        root.setPreferredSize(new Dimension(1080, 520));
+        root.setPreferredSize(new Dimension(920, 480)); // ventana más compacta
         return root;
     }
 
@@ -170,9 +199,6 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
                 flow.sourceFile() == null ? "Flow JSON (no encontrado)" : "Flow JSON: " + flow.sourceFile()
         );
         List<TraceBlock> filteredRoots = filterByText(flow.roots(), filterText);
-
-        tree.setModel(new DefaultTreeModel(rootUi));
-        expandAll(tree);
 
         List<TraceBlock> matches = BreakpointService.findByCallable(flow.roots(), targetCallable);
         String callableText = targetCallable == null || targetCallable.isBlank() ? "(sin callable detectado)" : targetCallable;
@@ -193,29 +219,24 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             return;
         }
 
-        if (!filterApplied && !matches.isEmpty()) {
-            TreePath matchPath = findPathForBlock(rootUi, matches.get(0));
-            if (matchPath != null) {
-                // Build tree only with the matched block's subtree
-                rootUi.removeAllChildren();
-                rootUi.add(buildTree(matches.get(0)));
-                tree.setModel(new DefaultTreeModel(rootUi));
-                expandAll(tree);
-
-                TreePath refreshedPath = findPathForBlock(rootUi, matches.get(0));
-                tree.setSelectionPath(refreshedPath);
-                tree.scrollPathToVisible(refreshedPath);
-                return;
-            }
-        }
-
-        // If there are matches via filter, show only filtered roots
+        // Build tree contents
         rootUi.removeAllChildren();
-        for (TraceBlock block : filteredRoots) {
+        List<TraceBlock> blocksToShow = filterApplied ? filteredRoots : flow.roots();
+        for (TraceBlock block : blocksToShow) {
             rootUi.add(buildTree(block));
         }
         tree.setModel(new DefaultTreeModel(rootUi));
         expandAll(tree);
+
+        // Select match if available and no filter
+        if (!filterApplied && !matches.isEmpty()) {
+            TreePath matchPath = findPathForBlock(rootUi, matches.get(0));
+            if (matchPath != null) {
+                tree.setSelectionPath(matchPath);
+                tree.scrollPathToVisible(matchPath);
+                return;
+            }
+        }
 
         if (rootUi.getChildCount() > 0) {
             DefaultMutableTreeNode firstChild = (DefaultMutableTreeNode) rootUi.getChildAt(0);
@@ -315,6 +336,209 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             return false;
         }
         return value.toLowerCase(Locale.ROOT).contains(needle);
+    }
+
+    private static void updateCommandPreview(Project project, JTextField field) {
+        String value = buildCommandPreview(project);
+        field.setText(value);
+        field.setCaretPosition(0);
+    }
+
+    private static String buildCommandPreview(Project project) {
+        try {
+            Object runProfile = tryGetActiveRunProfile(project);
+            if (runProfile == null) {
+                return "(sin configuración seleccionada)";
+            }
+            runProfile = unwrapRunProfile(runProfile);
+            if (!isPythonRunConfiguration(runProfile)) {
+                return "(la configuración activa no es Python)";
+            }
+            return buildCmdFromPyConfig(runProfile);
+        } catch (Throwable t) {
+            return "(no se pudo obtener el comando)";
+        }
+    }
+
+    private static Object tryGetActiveRunProfile(Project project) {
+        try {
+            var session = XDebuggerManager.getInstance(project).getCurrentSession();
+            if (session != null) {
+                Object profile = invokeObject(session, "getRunProfile");
+                if (profile != null) {
+                    return profile;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            RunManager runManager = RunManager.getInstance(project);
+            RunnerAndConfigurationSettings settings = runManager.getSelectedConfiguration();
+            if (settings != null) {
+                return settings.getConfiguration();
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static Object unwrapRunProfile(Object profile) {
+        if (profile == null) {
+            return null;
+        }
+        // Some profiles expose the configuration via getConfiguration()
+        Object config = invokeObject(profile, "getConfiguration");
+        if (config instanceof RunConfiguration) {
+            return config;
+        }
+        return profile;
+    }
+
+    private static boolean isPythonRunConfiguration(Object config) {
+        if (config == null) {
+            return false;
+        }
+        String name = config.getClass().getName();
+        return name.equals("com.jetbrains.python.run.PythonRunConfiguration")
+                || name.endsWith(".PythonRunConfiguration")
+                || name.endsWith(".AbstractPythonRunConfiguration");
+    }
+
+    private static String buildCmdFromPyConfig(Object config) {
+        String script = invokeString(config, "getScriptName");
+        if (script == null || script.isBlank()) {
+            // Some variants use getScriptPath
+            script = invokeString(config, "getScriptPath");
+        }
+        String params = invokeString(config, "getScriptParameters");
+        if (params == null || params.isBlank()) {
+            // Legacy field name
+            params = invokeString(config, "getParameters");
+        }
+
+        if (script == null || script.isBlank()) {
+            return "(sin script en la configuración Python)";
+        }
+        StringBuilder cmd = new StringBuilder();
+        cmd.append("python pytraceflow.py -s \"").append(script).append("\"");
+        if (params != null && !params.isBlank()) {
+            cmd.append(" ").append(params.trim());
+        }
+        return cmd.toString();
+    }
+
+    private static void runGeneration(
+            Project project,
+            JButton button,
+            JTextField cmdField,
+            JLabel status,
+            Tree tree,
+            JTextArea details,
+            String targetCallable,
+            JTextField searchField
+    ) {
+        String commandText = cmdField.getText();
+        List<String> parts = ParametersListUtil.parse(commandText);
+        if (parts.isEmpty()) {
+            status.setText("Comando vacío; no se ejecuta.");
+            return;
+        }
+
+        String detectedJsonPath = extractJsonPath(parts);
+        final String jsonPathArg = detectedJsonPath == null || detectedJsonPath.isBlank() ? null : detectedJsonPath;
+
+        button.setEnabled(false);
+        Color originalColor = button.getBackground();
+        String originalText = button.getText();
+        button.setText("Generando...");
+        button.setBackground(Color.LIGHT_GRAY);
+
+        var executor = com.intellij.openapi.application.ApplicationManager.getApplication();
+        executor.executeOnPooledThread(() -> {
+            try {
+                GeneralCommandLine cmd = new GeneralCommandLine(parts);
+                if (project.getBasePath() != null) {
+                    cmd.setWorkDirectory(project.getBasePath());
+                }
+                var output = ExecUtil.execAndGetOutput(cmd);
+                if (output.getExitCode() != 0) {
+                    String msg = "Fallo al generar (" + output.getExitCode() + "): " + output.getStderr();
+                    SwingUtilities.invokeLater(() -> status.setText(msg));
+                } else {
+                    String resolved = chooseExistingJson(project, jsonPathArg);
+                    if (resolved != null) {
+                        BreakpointService.setOverrideJsonPath(resolved);
+                        SwingUtilities.invokeLater(() -> {
+                            status.setText("Generado OK -> " + resolved);
+                            refreshFlow(project, targetCallable, searchField.getText(), status, tree, details);
+                        });
+                    } else {
+                        SwingUtilities.invokeLater(() -> status.setText("No se encontró un JSON generado (probé comando, ptf.json y pytraceflow.json)"));
+                    }
+                }
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> status.setText("Error al ejecutar: " + ex.getMessage()));
+            } finally {
+                SwingUtilities.invokeLater(() -> {
+                    button.setText(originalText);
+                    button.setBackground(originalColor);
+                    button.setEnabled(true);
+                });
+            }
+        });
+    }
+
+    private static String extractJsonPath(List<String> parts) {
+        for (int i = parts.size() - 1; i >= 0; i--) {
+            String token = parts.get(i);
+            if (token.toLowerCase(Locale.ROOT).endsWith(".json")) {
+                return token;
+            }
+        }
+        return null;
+    }
+
+    private static String resolveJsonPath(Project project, String jsonPath) {
+        if (jsonPath == null || jsonPath.isBlank()) {
+            return null;
+        }
+        Path path = Paths.get(jsonPath);
+        if (!path.isAbsolute() && project.getBasePath() != null) {
+            path = Paths.get(project.getBasePath()).resolve(path);
+        }
+        return path.normalize().toString();
+    }
+
+    private static String chooseExistingJson(Project project, String jsonFromCommand) {
+        String[] candidates = new String[]{
+                jsonFromCommand,
+                "ptf.json",
+                "pytraceflow.json"
+        };
+        for (String candidate : candidates) {
+            String resolved = resolveJsonPath(project, candidate);
+            if (resolved != null && Files.exists(Paths.get(resolved))) {
+                return resolved;
+            }
+        }
+        return null;
+    }
+
+    private static String invokeString(Object target, String methodName) {
+        Object obj = invokeObject(target, methodName);
+        return obj == null ? null : obj.toString();
+    }
+
+    private static Object invokeObject(Object target, String methodName) {
+        if (target == null) {
+            return null;
+        }
+        try {
+            var method = target.getClass().getMethod(methodName);
+            return method.invoke(target);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private static String formatBlockDetails(TraceBlock block) {
