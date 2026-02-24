@@ -13,6 +13,7 @@ import com.intellij.execution.configurations.RunProfile;
 import com.intellij.execution.util.ExecUtil;
 import com.intellij.execution.configurations.GeneralCommandLine;
 import com.intellij.util.execution.ParametersListUtil;
+import com.intellij.ui.JBColor;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.execution.RunManager;
@@ -114,6 +115,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
 
     private static JPanel buildPopupPanel(Project project, String targetCallable) {
         JPanel root = new JPanel(new BorderLayout(0, 8));
+        applyBaseColors(root);
 
         JLabel status = new JLabel();
 
@@ -123,18 +125,23 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         commandPreview.setEditable(true);
         JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         actionRow.add(generateBtn);
-        actionRow.add(new JLabel("Comando:"));
+        actionRow.add(new JLabel("Command:"));
         actionRow.add(commandPreview);
+        applyAccentRowColors(actionRow, commandPreview);
+        styleButton(generateBtn);
 
         JButton refresh = new JButton("Refresh");
         JTextField searchField = new JTextField(24);
-        JButton searchButton = new JButton("Buscar");
+        JButton searchButton = new JButton("Search");
         JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         header.add(refresh);
-        header.add(new JLabel("Filtro callable/called:"));
+        header.add(new JLabel("Filter callable/called:"));
         header.add(searchField);
         header.add(searchButton);
         header.add(status);
+        applyHeaderColors(header, status);
+        styleButton(refresh);
+        styleButton(searchButton);
 
         JPanel north = new JPanel();
         north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
@@ -142,19 +149,20 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
         north.add(header);
         root.add(north, BorderLayout.NORTH);
 
-        DefaultMutableTreeNode placeholder = new DefaultMutableTreeNode("Sin datos");
+        DefaultMutableTreeNode placeholder = new DefaultMutableTreeNode("No data");
         Tree tree = new Tree(new DefaultTreeModel(placeholder));
         JTextArea details = new JTextArea();
         details.setEditable(false);
         details.setLineWrap(true);
         details.setWrapStyleWord(true);
+        styleTextAreas(tree, details);
 
         JSplitPane splitPane = new JSplitPane(
                 JSplitPane.HORIZONTAL_SPLIT,
                 ScrollPaneFactory.createScrollPane(tree),
                 ScrollPaneFactory.createScrollPane(details)
         );
-        splitPane.setResizeWeight(0.30); // 30% árbol, 70% detalle
+        splitPane.setResizeWeight(0.30); // 30% tree, 70% details
         root.add(splitPane, BorderLayout.CENTER);
 
         tree.addTreeSelectionListener(e -> {
@@ -191,30 +199,30 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             String filterText,
             JLabel status,
             Tree tree,
-            JTextArea details
+        JTextArea details
     ) {
         ExecutionFlowData flow = BreakpointService.readExecutionFlow(project);
 
         DefaultMutableTreeNode rootUi = new DefaultMutableTreeNode(
-                flow.sourceFile() == null ? "Flow JSON (no encontrado)" : "Flow JSON: " + flow.sourceFile()
+                flow.sourceFile() == null ? "Flow JSON (not found)" : "Flow JSON: " + flow.sourceFile()
         );
         List<TraceBlock> filteredRoots = filterByText(flow.roots(), filterText);
 
         List<TraceBlock> matches = BreakpointService.findByCallable(flow.roots(), targetCallable);
-        String callableText = targetCallable == null || targetCallable.isBlank() ? "(sin callable detectado)" : targetCallable;
-        String filterLabel = (filterText == null || filterText.isBlank()) ? "sin filtro" : "\"" + filterText + "\"";
+        String callableText = targetCallable == null || targetCallable.isBlank() ? "(no callable detected)" : targetCallable;
+        String filterLabel = (filterText == null || filterText.isBlank()) ? "no filter" : "\"" + filterText + "\"";
         status.setText("Callable breakpoint: " + callableText
                 + " | Roots: " + flow.roots().size()
                 + " | Matches: " + matches.size()
-                + " | Filtro: " + filterLabel);
+                + " | Filter: " + filterLabel);
 
         boolean filterApplied = filterText != null && !filterText.isBlank();
 
-        // Sin filtro y sin coincidencias: no mostrar nada
+        // Without filter and without matches: show nothing
         if (!filterApplied && matches.isEmpty()) {
             rootUi.removeAllChildren();
             tree.setModel(new DefaultTreeModel(rootUi));
-            details.setText("No se encontraron coincidencias para el callable detectado.");
+            details.setText("No matches found for detected callable.");
             tree.clearSelection();
             return;
         }
@@ -244,7 +252,7 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             tree.setSelectionPath(firstPath);
             tree.scrollPathToVisible(firstPath);
         } else {
-            details.setText("No se encontraron bloques de ejecucion en el JSON.");
+            details.setText("No execution blocks found in the JSON.");
             tree.clearSelection();
         }
     }
@@ -444,14 +452,20 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             return;
         }
 
+        if (Boolean.TRUE.equals(button.getClientProperty("busy"))) {
+            return;
+        }
+
         String detectedJsonPath = extractJsonPath(parts);
         final String jsonPathArg = detectedJsonPath == null || detectedJsonPath.isBlank() ? null : detectedJsonPath;
 
-        button.setEnabled(false);
         Color originalColor = button.getBackground();
         String originalText = button.getText();
+        Color originalFg = button.getForeground();
         button.setText("Generando...");
         button.setBackground(Color.LIGHT_GRAY);
+        button.setForeground(Color.WHITE);
+        button.putClientProperty("busy", true);
 
         var executor = com.intellij.openapi.application.ApplicationManager.getApplication();
         executor.executeOnPooledThread(() -> {
@@ -482,7 +496,8 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
                 SwingUtilities.invokeLater(() -> {
                     button.setText(originalText);
                     button.setBackground(originalColor);
-                    button.setEnabled(true);
+                    button.setForeground(originalFg);
+                    button.putClientProperty("busy", null);
                 });
             }
         });
@@ -522,6 +537,83 @@ public class PytraceflowBreakpointLineMarkerProvider extends LineMarkerProviderD
             }
         }
         return null;
+    }
+
+    private static void applyBaseColors(JPanel root) {
+        Color bg = new JBColor(new Color(245, 247, 250), new Color(43, 49, 58));
+        root.setBackground(bg);
+    }
+
+    private static void applyAccentRowColors(JPanel row, JTextField commandField) {
+        // Entre el título (más oscuro) y la franja del buscador (más clara)
+        Color rowBg = new JBColor(new Color(228, 234, 242), new Color(46, 54, 65));
+        Color border = new JBColor(new Color(190, 198, 210), new Color(70, 80, 95));
+        row.setBackground(rowBg);
+        row.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, border),
+                BorderFactory.createEmptyBorder(4, 6, 4, 6)
+        ));
+        commandField.setBackground(new JBColor(new Color(250, 252, 255), new Color(62, 70, 82)));
+        commandField.setForeground(new JBColor(new Color(18, 26, 33), new Color(225, 235, 245)));
+        commandField.setBorder(BorderFactory.createLineBorder(border));
+    }
+
+    private static void applyHeaderColors(JPanel header, JLabel status) {
+        Color bg = new JBColor(new Color(236, 242, 248), new Color(50, 58, 70));
+        header.setBackground(bg);
+        status.setForeground(new JBColor(new Color(20, 92, 64), new Color(150, 230, 200)));
+    }
+
+    private static void styleTextAreas(Tree tree, JTextArea details) {
+        Color paneBg = new JBColor(new Color(250, 251, 253), new Color(38, 44, 52));
+        Color text = new JBColor(new Color(20, 24, 30), new Color(225, 233, 243));
+        tree.setBackground(paneBg);
+        details.setBackground(paneBg);
+        details.setForeground(text);
+        tree.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        details.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
+    }
+
+    private static void styleButton(AbstractButton button) {
+        Color normal = new JBColor(new Color(242, 244, 250), new Color(108, 116, 132));     // claro
+        Color hover = new JBColor(new Color(222, 226, 238), new Color(94, 102, 120));       // medio
+        Color pressed = new JBColor(new Color(196, 202, 216), new Color(78, 86, 104));      // oscuro al pulsar
+        Color text = new JBColor(new Color(28, 30, 36), Color.WHITE);                       // oscuro en claro, blanco en oscuro
+        button.setFocusPainted(false);
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
+        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        button.setBackground(normal);
+        button.setForeground(text);
+        button.putClientProperty("JButton.disabledText", text);
+        Color shadow = new JBColor(new Color(182, 186, 196), new Color(82, 88, 102));
+        Color highlight = new JBColor(new Color(252, 253, 255), new Color(142, 150, 168));
+        button.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1,1,2,2, shadow),
+                BorderFactory.createMatteBorder(0,0,1,1, highlight)
+        ));
+        button.addChangeListener(e -> {
+            ButtonModel model = button.getModel();
+            if (model.isPressed()) {
+                button.setBackground(pressed);
+                button.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createMatteBorder(2,2,1,1, shadow),
+                        BorderFactory.createMatteBorder(0,0,1,1, highlight)
+                ));
+            } else if (model.isRollover()) {
+                button.setBackground(hover);
+                button.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createMatteBorder(1,1,2,2, shadow),
+                        BorderFactory.createMatteBorder(0,0,1,1, highlight)
+                ));
+            } else {
+                button.setBackground(normal);
+                button.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createMatteBorder(1,1,2,2, shadow),
+                        BorderFactory.createMatteBorder(0,0,1,1, highlight)
+                ));
+            }
+        });
     }
 
     private static String invokeString(Object target, String methodName) {

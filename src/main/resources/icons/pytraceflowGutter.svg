@@ -1,4 +1,5 @@
 <svg width="12" height="12" viewBox="0 0 12 12" xmlns="http://www.w3.org/2000/svg">
-  <rect x="0.5" y="0.5" width="11" height="11" rx="2.2" fill="#1E9E6E" stroke="#0E5F44" stroke-width="1"/>
-  <text x="6" y="7" text-anchor="middle" font-family="JetBrains Mono, Consolas, monospace" font-size="6.2" font-weight="700" fill="#FFFFFF" letter-spacing="0.2">PTF</text>
+  <g transform="translate(6 6) rotate(45) translate(-6 -6)">
+    <rect x="2" y="2" width="8" height="8" rx="1.2" fill="#FFC94A" stroke="#C68A00" stroke-width="0.9"/>
+  </g>
 </svg>
