@@ -4,6 +4,7 @@
 [![PyCharm 2024.3+](https://img.shields.io/badge/PyCharm-2024.3%2B-000?logo=pycharm&logoColor=white)](#)
 [![IntelliJ Platform](https://img.shields.io/badge/IntelliJ%20Platform-plugin-4455ff?logo=intellijidea&logoColor=white)](#)
 [![Build with Gradle](https://img.shields.io/badge/build-Gradle-02303A?logo=gradle)](#)
+[![License MIT](https://img.shields.io/badge/License-MIT-yellow)](#licencia)
 
 Complemento para PyCharm que muestra un icono en el gutter de líneas con breakpoints de Python y abre un panel interactivo con el flujo de ejecución generado por Pytraceflow. Detecta el callable asociado a la línea, vincula los bloques de ejecución del JSON y permite filtrarlos y explorarlos en detalle (entradas, salidas, memoria, errores y llamadas hijas).
 
@@ -72,4 +73,4 @@ Abrirá una instancia de PyCharm con el plugin cargado para pruebas locales.
 - Lanzar IDE de prueba: `.\gradlew runIde`
 
 ## Licencia
-No se ha declarado una licencia en este repositorio; define una antes de distribuir el plugin.
+MIT; consulta [LICENSE](/C:/Users/torog/IdeaProjects/Pytraceflow_plugin/LICENSE).
